@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.DS_Store
+data/raw/*.parquet
+data/raw/retrosheet/
+data/raw/register_crosswalk.parquet
+data/raw/sprint_speed/
