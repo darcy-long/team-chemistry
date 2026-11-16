@@ -15,7 +15,14 @@ import pandas as pd
 import requests
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw" / "retrosheet"
-SEASONS = [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023, 2024, 2025]  # no 2020
+ALL_SEASONS = [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023, 2024, 2025, 2026]  # no 2020
+
+# Retrosheet posts a season's play-by-play after the season ends, sometimes months later.
+# A season listed here has no file yet (2026 returned 404 on 2026-11-05), so every script that
+# loops over SEASONS skips it. As soon as the file has been downloaded it is used automatically;
+# once Retrosheet has it, take the year out of this set.
+NOT_PUBLISHED_YET = {2026}
+SEASONS = [y for y in ALL_SEASONS if y not in NOT_PUBLISHED_YET or (RAW_DIR / f"{y}plays.parquet").exists()]
 
 # All-Star game rows use fake team codes, so they get dropped
 ALL_STAR_CODES = {"ALS", "NLS"}
@@ -44,5 +51,18 @@ def pull_season(year, force=False):
 
 
 if __name__ == "__main__":
-    for year in SEASONS:
-        pull_season(year)
+    have, missing = [], []
+    for year in ALL_SEASONS:
+        try:
+            have.append((year, len(pull_season(year))))
+        except requests.HTTPError as err:
+            if err.response is not None and err.response.status_code == 404:
+                print(f"{year}: not on Retrosheet yet, skipping")
+                missing.append(year)
+            else:
+                raise
+    print(f"\nDone. {len(have)} seasons of play-by-play are in {RAW_DIR}:")
+    for year, n in have:
+        print(f"  {year}: {n:,} plays")
+    if missing:
+        print(f"Not on Retrosheet yet: {missing}")

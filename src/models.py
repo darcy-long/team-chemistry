@@ -20,17 +20,23 @@ Steps, in order: compute_shrunk_expected_rate -> compute_residuals -> aggregate_
 import pandas as pd
 
 
-def compute_shrunk_expected_rate(df, outcome_col, bucket_cols, m=20.0):
+def compute_shrunk_expected_rate(df, outcome_col, bucket_cols, m=20.0, league_group_col=None):
     """Add an expected_rate column: the shrunk rate for each row's situation.
 
     outcome_col : 0/1 column (1 = took the extra base)
     bucket_cols : columns that define a situation, e.g. ["opportunity_type", "outs_pre"]
     m           : higher = trust the league average more, lower = trust the situation more
                   (20 is a starting point, check it against your bucket sizes)
+    league_group_col : by default every situation is pulled toward one overall rate. Give a
+                  column (which must also be in bucket_cols) to pull each situation toward
+                  the rate of its own group instead, e.g. its own opportunity type. Matters
+                  when groups have very different rates.
     """
-    league_rate = df[outcome_col].mean()
-
     buckets = df.groupby(bucket_cols)[outcome_col].agg(n="count", rate="mean").reset_index()
+    if league_group_col is None:
+        league_rate = df[outcome_col].mean()
+    else:
+        league_rate = buckets[league_group_col].map(df.groupby(league_group_col)[outcome_col].mean())
     buckets["expected_rate"] = (buckets["n"] * buckets["rate"] + m * league_rate) / (buckets["n"] + m)
 
     return df.merge(buckets[bucket_cols + ["expected_rate"]], on=bucket_cols, how="left")

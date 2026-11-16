@@ -10,12 +10,16 @@ Usage:
     python src/pull_sprint_speed.py
 """
 
+import io
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "raw" / "sprint_speed"
 SEASONS = [2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023, 2024, 2025]  # no 2020
+URL = ("https://baseballsavant.mlb.com/leaderboard/sprint_speed?min_season={year}&max_season={year}"
+       "&position=&team=&min={min_opp}&csv=true")
 
 
 def pull_season(year, min_opp=5, force=False):
@@ -24,10 +28,10 @@ def pull_season(year, min_opp=5, force=False):
     if cache.exists() and not force:
         return pd.read_parquet(cache)
 
-    from pybaseball import statcast_sprint_speed
-
     print(f"{year}: downloading sprint speed...")
-    df = statcast_sprint_speed(year, min_opp=min_opp)
+    resp = requests.get(URL.format(year=year, min_opp=min_opp), timeout=120)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.content.decode("utf-8-sig")))
     df["season"] = year
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,4 +45,5 @@ def pull_all_seasons(seasons=SEASONS):
 
 if __name__ == "__main__":
     all_speed = pull_all_seasons()
-    print(f"{len(all_speed):,} player-seasons")
+    print(f"\nDone. {len(all_speed):,} player-seasons saved in {CACHE_DIR}:")
+    print(all_speed.groupby("season").size().rename("players").to_string())
