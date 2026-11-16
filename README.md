@@ -35,7 +35,14 @@ This project is attempting to put a number on it. The idea is to look at plays t
 - **Code:** `src/extra_bases.py` finds the opportunities, and `src/models.py` does the expected rate and averaging. Output is `data/processed/extra_bases.csv`.
 - **Trying other settings:** `extra_bases.py` can turn the situation columns on or off (depth, gap, sprint speed) and compute expected rates per season instead of pooled, e.g. `python src/extra_bases.py --no-gap --by-season`. Add `--diagnostics` to print how many situations are thin under each choice. With all columns on, about half of the situations have under 20 opportunities, which is why the shrinkage in step 3 matters. Runs with non-default settings save to `extra_bases_experiment.csv` so they don't overwrite the real output.
 
-*Also will be turned into a separate statistic potentially*
+**Extra bases stat (`src/extra_bases_stat/`).** A separate, pure stat for now: it is not connected to Extra Bases Taken above or to the Hustle Index. It adds the batter stretching a single (for 2) or double (for 3, bases empty only) and the runner on 3rd tagging on a fly out, and replaces the depth/gap buckets with the Statcast distance from where the ball was fielded to the base the runner is heading for (5 quantile bins per kind of chance). The expected result is the average of the situation (shrinkage is available with `--shrinkage` but off by default).
+
+**Full write-up of the process and where it stands: [`src/extra_bases_stat/README.md`](src/extra_bases_stat/README.md).**
+
+- **Default (the "pure" stat):** includes postseason games (1.4% of chances), scores results (safe extra base +1, held 0, thrown out -1) and is speed-neutral (a runner's own speed isn't in the situation), which is how a published leaderboard treats it.
+- `--own-speed` adds the runner's sprint speed decile, so each runner is compared with runners of his own speed (aggressiveness given his ability). `--hustle` scores the attempt instead (thrown out counts as going). `--hustle --own-speed` is the hustle stat. `--regular-season` leaves the playoffs out (files get `_regularseason`), which is what the standings use.
+- Outputs (`data/processed/extra_bases_stat/`): `extra_bases_statcast.csv` (team-seasons: `score_<type>` per kind of chance, `raw_score` = their average), `extra_bases_runners.csv` (runner-seasons) and `extra_bases_runners_career.csv`. Other settings (`_hustle` / `_ownspeed` / `_regularseason` in the names) are written to `extra_bases_stat/variants/`, and the Savant comparison to `extra_bases_stat/savant_comparison/`; both are gitignored (large), so run the stat to regenerate them. The runner files' `net_bases_above_expected` is the sum of residuals: net bases over what a typical runner would have gained on the same plays.
+
 
 
 ### 3.2 Defensive Effort Gap (DEG) -- TO BE REMOVED
@@ -85,10 +92,24 @@ team-chemistry/
 │   ├── pull_retrosheet.py     # download Retrosheet play-by-play
 │   ├── pull_sprint_speed.py   # download Statcast sprint speed
 │   ├── player_crosswalk.py    # Retrosheet player ID -> Statcast player ID
+│   ├── game_crosswalk.py      # Retrosheet game ID (gid) -> Statcast game_pk
+│   ├── play_pitch_join.py     # attach Statcast pitch data to every Retrosheet play
 │   ├── team_codes.py          # Retrosheet -> Statcast team code lookup
 │   ├── check_team_codes.py    # checks the two sources' team codes agree
 │   │  # 2. build the indicators
 │   ├── extra_bases.py         # Extra Bases Taken
+│   ├── extra_bases_stat/      # the extra bases stat, separate from the indicator (see its README.md)
+│   │   ├── README.md                      # process, results, open questions
+│   │   ├── opportunities.py               # the six kinds of chance
+│   │   ├── extra_bases_statcast.py        # the stat
+│   │   ├── run_expectancy.py              # RE24 table
+│   │   ├── run_values.py                  # run value of each result (--runs)
+│   │   ├── smooth_model.py                # smooth odds (--odds smooth)
+│   │   ├── evaluate_smooth.py             # smooth odds vs buckets
+│   │   ├── compare_to_savant.py           # ours vs Savant, by runner
+│   │   ├── compare_components.py          # run version vs Savant, by part
+│   │   ├── explore_vs_savant.py           # Savant comparison charts (HTML)
+│   │   └── compare_extra_bases_to_winning.py  # team score vs winning
 │   ├── models.py              # expected-rate math used by extra_bases.py
 │   ├── deg.py                 # Defensive Effort Gap
 │   ├── standings.py           # W/L, run differential, Pythagorean wins
@@ -98,17 +119,38 @@ team-chemistry/
 │   └── check_data.py          # sanity check on the processed CSVs
 ├── tests/
 │   ├── test_deg.py
+│   ├── test_extra_bases_statcast.py
+│   ├── test_game_crosswalk.py
 │   ├── test_hustle_index.py
-│   └── test_models.py
+│   ├── test_models.py
+│   ├── test_opportunities.py
+│   ├── test_play_pitch_join.py
+│   ├── test_run_expectancy.py
+│   ├── test_run_values.py
+│   └── test_smooth_model.py
 └── data/
     ├── raw/                   # created by the pull scripts (not included, too large)
     │   ├── statcast_YYYY.parquet
     │   ├── retrosheet/
     │   ├── sprint_speed/
-    │   └── register_crosswalk.parquet
+    │   ├── register_crosswalk.parquet
+    │   ├── register_names.parquet
+    │   └── savant/            # Savant leaderboard downloads (not tracked; copy from extra_bases_statcast/)
+    ├── extra_bases_statcast/  # Savant base-running leaderboard, base_running_YYYY.csv (downloaded by hand)
     └── processed/
         ├── extra_bases.csv    # Extra Bases Taken output
+        ├── extra_bases_stat/  # extra bases stat outputs
+        │   ├── extra_bases_statcast.csv         # team-seasons
+        │   ├── extra_bases_runners.csv          # runner-seasons (and _career)
+        │   ├── run_expectancy.csv               # RE24 per season
+        │   ├── winning/, winning_regularseason/ # team score vs winning
+        │   ├── smooth_model/                    # smooth odds vs buckets
+        │   ├── variants/                        # other settings (not tracked, regenerate)
+        │   ├── without_batter_for_3/            # batter_for_3 left out (not tracked)
+        │   └── savant_comparison/               # ours vs the Savant leaderboard (not tracked)
         ├── deg.csv            # DEG output
+        ├── game_crosswalk.csv # one row per game: gid <-> game_pk
+        ├── plays_statcast/    # YYYY.parquet: Retrosheet plays + Statcast pitch data (not tracked, large)
         ├── standings.csv      # W/L, run differential, etc.
         └── hustle_index.csv   # final Hustle Index
 ```
@@ -144,8 +186,9 @@ python -m pytest
 ## 7. Data Sources
 - Statcast via `pybaseball`
 - Retrosheet (baserunning, standings)
-- Statcast sprint speed via `pybaseball`
-- Chadwick Bureau Register (player ID crosswalk)
+- Statcast sprint speed (Baseball Savant leaderboard CSV)
+- Chadwick Bureau Register (player ID crosswalk and player names)
+- Baseball Savant base-running leaderboard (downloaded by hand, kept in `data/extra_bases_statcast/`), used only to check the extra bases stat
 
 ## 8. Notes
 - The z-scoring lives in `hustle_index.py` only. An earlier version of `models.py` had its own z-score function that used a slightly different standard deviation, but the index always starts from the raw scores, so I dropped it to avoid having two.
