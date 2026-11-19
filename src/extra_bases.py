@@ -40,6 +40,19 @@ MIN_OPPORTUNITIES = 50
 SHRINKAGE_M = 20.0
 BASE_BUCKETS = ["hittype", "outs_pre", "opportunity_type"]
 
+# Retrosheet marks an out that an error cancelled with an E in the parentheses after it, e.g. 1X3(6E4) or
+# 2XH(UR)(8E3)(NR): those runners are safe, so they don't count as thrown out. Several parentheticals can
+# follow an out, so the whole chain is read. If one of them is a plain putout like (62), the out stands and
+# the error happened somewhere else on the play: 1XH(62)(E8), BX3(E9)(95).
+# Used right after the out token, as a negative lookahead.
+NOT_NEGATED_BY_ERROR = r"(?!(?!(?:\([^)]*\))*\(\d+\))(?:\([^)]*\))*\([^)]*E)"
+
+
+def regex_in(events, pattern):
+    """Which events contain the pattern. Uses Python's re (the pyarrow string engine pandas can use cannot
+    read the lookaheads these patterns need), and a missing event is False."""
+    return events.astype(object).str.contains(pattern, na=False, regex=True).astype(bool)
+
 # name, hit column, column with the runner's ID before the play,
 # column that holds the ID of a runner who scored from that base,
 # pattern in the play text for "thrown out trying for the extra base",
@@ -59,10 +72,11 @@ def find_opportunities(plays):
         opp["opportunity_type"] = name
         opp["runner_id"] = opp[runner_col]
 
-        went = (opp[runner_col] == opp[scored_col]) | opp["event"].str.contains(out_pattern, na=False)
+        went = (opp[runner_col] == opp[scored_col]) | regex_in(opp["event"], out_pattern)
         if third_col:
             went |= opp[runner_col] == opp[third_col]
         opp["took_extra_base"] = went.astype(int)
+        opp["thrown_out"] = regex_in(opp["event"], out_pattern + NOT_NEGATED_BY_ERROR).astype(int)
         frames.append(opp)
 
     opps = pd.concat(frames, ignore_index=True)
@@ -188,4 +202,8 @@ if __name__ == "__main__":
     out_path = OUT_DIR / ("extra_bases.csv" if is_default else "extra_bases_experiment.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     scores.to_csv(out_path, index=False)
-    print(f"Saved {len(scores)} team-seasons to {out_path}")
+    print(f"\nDone. Saved {len(scores)} team-seasons to {out_path}")
+    print(f"Seasons {scores['season'].min()}-{scores['season'].max()}, {scores['n_opportunities'].sum():,} chances in total")
+    cols = ["team", "season", "raw_score", "n_opportunities"]
+    print("\nBest 5 team-seasons:\n" + scores.nlargest(5, "raw_score")[cols].round(3).to_string(index=False))
+    print("\nWorst 5 team-seasons:\n" + scores.nsmallest(5, "raw_score")[cols].round(3).to_string(index=False))

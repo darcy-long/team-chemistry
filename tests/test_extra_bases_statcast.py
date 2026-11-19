@@ -10,7 +10,7 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(SRC / "extra_bases_stat"))
 
-from extra_bases_statcast import add_batted_ball_location
+from extra_bases_statcast import add_batted_ball_location, aggregate_by_type
 
 
 def make(opp_type, hc_x, hc_y):
@@ -159,3 +159,15 @@ def test_held_out_expected_falls_back_to_the_kind_average_for_unseen_situations(
     assert out.loc[6] == 0.5     # unseen (a, L): falls back to kind a's 2020 average
     assert out.loc[7] == 1.0     # (b, G) in 2020
     assert out.loc[[100, 101]].tolist() == [1.0, 1.0] and out.loc[102] == 0.0   # 2020 predicted from 2021
+
+
+def test_team_total_is_the_sum_of_residuals_not_the_raw_score_times_chances():
+    # one team: 10 batter_for_2 chances averaging -0.1, 2 3rd_on_fly chances averaging +0.9
+    rows = [("BOS", 2024, "batter_for_2", -0.1)] * 10 + [("BOS", 2024, "3rd_on_fly", 0.9)] * 2
+    opps = pd.DataFrame(rows, columns=["team", "season", "opportunity_type", "residual"])
+    out = aggregate_by_type(opps, min_opportunities=1).iloc[0]
+    assert out["net_bases_above_expected"] == pytest.approx(-1.0 + 1.8)
+    assert out["per_chance"] == pytest.approx(0.8 / 12)
+    assert out["raw_score"] == pytest.approx((-0.1 + 0.9) / 2)    # kinds weigh the same: not the per-chance rate
+    runs = aggregate_by_type(opps, min_opportunities=1, runs=True).iloc[0]
+    assert runs["runs_above_expected"] == pytest.approx(0.8)

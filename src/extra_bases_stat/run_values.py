@@ -53,6 +53,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src/, for the shared modules
 
+from extra_bases import NOT_NEGATED_BY_ERROR, regex_in
 from run_expectancy import lookup_re, state_from_runner_columns
 
 OUT, ABSENT, SCORED = -1, -9, 4
@@ -95,7 +96,7 @@ def actual_destinations(opps, hit_bases):
     event = opps["event"].fillna("")
     for origin in range(4):
         letter = "B" if origin == 0 else str(origin)
-        put_out = event.str.contains(letter + r"X[123H](?!\([^)]*E)", regex=True).to_numpy()
+        put_out = regex_in(event, letter + r"X[123H]" + NOT_NEGATED_BY_ERROR).to_numpy()
         if origin == 0:
             put_out = put_out | (opps["opportunity_type"] == "3rd_on_fly").to_numpy()   # caught fly ball
         unclear = inning_over & (dest[:, origin] == OUT) & ~put_out

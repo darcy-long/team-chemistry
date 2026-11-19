@@ -1,5 +1,5 @@
 """
-Extra Bases Taken, version 2: Statcast batted-ball buckets, all six kinds of chance.
+Extra bases stat: Statcast batted-ball buckets, all six kinds of chance. A pure stat for now, not connected to extra_bases.py or the Hustle Index.
 
 Same idea as extra_bases.py (did the runner go for the extra base more often than
 runners usually do in the same situation?), but the Retrosheet "how deep was the ball"
@@ -35,12 +35,15 @@ The expected value is computed the same way in both cases (the average of that o
 situation).
 
 Score: each opportunity's residual is outcome - expected. Per team-season we report the
-mean residual for each kind of chance (score_<type>), and raw_score = the average of
-those, each kind counting equally (kinds with very different numbers of chances would
-otherwise be dominated by the biggest one).
+mean residual for each kind of chance (score_<type>), the team's total (net_bases_above_expected,
+or runs_above_expected in the run version: the sum of all its residuals), and per_chance (that
+total divided by n_opportunities). Use these for comparing teams. raw_score is the average of the
+score_<type> columns, each kind counting equally: it is only a summary of the six kinds, and it is
+NOT the total divided by the chances (tiny kinds such as 3rd_on_fly weigh as much as batter_for_2).
 
-Smooth odds (--odds smooth): the expected odds come from smooth_model.py instead of the buckets (see README 3c).
-Outputs go in variants/ with _smooth added; the default stays the buckets.
+Smooth odds (default, --odds smooth): the expected odds come from smooth_model.py (gradient-boosted
+trees fitted out of sample by season; see README 3c). --odds buckets uses the situation buckets instead,
+and writes to variants/ with _buckets added.
 
 Flat values (--runs --values flat): the same scoring, but an extra base is worth +0.25 runs and a thrown out costs
 0.70 in every base-out state, instead of the run expectancy of the actual state. Savant's numbers behave this way
@@ -50,11 +53,10 @@ Run values (--runs): instead of bases, each chance is scored in runs. The situat
 of each result (safe, held, thrown out); run_values.py gives what each result is worth for that chance's
 own base-out state (the runner's result changed, everyone else's kept; values from a per-season run
 expectancy table, run_expectancy.py). score = value of what happened - sum(odds * value), and the
-unit becomes runs: runs_above_expected, runs_<kind>. Chances with no run value (walk-offs, where the
-game ends before the bases are filled in) are left out of this version, and so are chances where a runner
-ahead stayed on the base the runner would have gone to (about 10% of runner-on-1st singles): going wasn't an
-option, so they aren't decisions, and in a run version they would only drag the go-rate down. Outputs go in variants/ with
-_runs added to the file names. Hustle and out-penalty are bases-only settings and can't be combined with it.
+unit becomes runs: runs_above_expected, runs_<kind>. Every chance has a run value: the plays that would not
+(the ones that end the game) and the runner-on-1st singles that a runner ahead blocked are dropped from every
+version when the chances are built (see opportunities.py). Outputs go in variants/ with _runs added to the file
+names. Hustle and out-penalty are bases-only settings and can't be combined with it.
 
 Postseason games are included by default (about 1.4% of chances). --regular-season leaves them out,
 which matches standings.py and DEG, both regular season only.
@@ -137,6 +139,7 @@ PLAY_COLUMNS = [
     "br1_pre", "br2_pre", "br3_pre", "br1_post", "br2_post", "br3_post", "run_b", "run1", "run2", "run3",
     "outs_pre", "outs_post", "runs", "loc", "hittype", "sc_status", "sc_hc_x", "sc_hc_y",
     "sc_launch_speed", "sc_launch_angle", "gametype",
+    "score_v", "score_h",                      # for dropping walk-offs (opportunities.drop_undecided_plays)
     "bathand", "site", "sc_hit_distance_sc",   # only used by smooth_model.py
 ]
 
@@ -301,23 +304,25 @@ def evaluate(opps, m=SHRINKAGE_M):
 
 
 def aggregate_by_type(opps, min_opportunities=MIN_OPPORTUNITIES, runs=False):
-    """One row per team-season: score_<type> and n_<type> for each kind of chance, raw_score
-    (the average of the score_<type> columns), and n_opportunities (all kinds together).
-    runs=True (the run-value version) also adds runs_above_expected, the team's total."""
+    """One row per team-season: score_<type> and n_<type> for each kind of chance, n_opportunities (all
+    kinds together), the team's total (net_bases_above_expected, or runs_above_expected when runs=True:
+    the sum of its residuals), per_chance (total / n_opportunities), and raw_score (the plain average of
+    the score_<type> columns, which is NOT total / n_opportunities: see the module docstring)."""
     g = opps.groupby(["team", "season", "opportunity_type"])["residual"].agg(["mean", "count"]).reset_index()
     means = g.pivot(index=["team", "season"], columns="opportunity_type", values="mean").add_prefix("score_")
     counts = g.pivot(index=["team", "season"], columns="opportunity_type", values="count").add_prefix("n_")
     out = means.join(counts)
     out["raw_score"] = means.mean(axis=1)
     out["n_opportunities"] = counts.sum(axis=1)
-    if runs:
-        out["runs_above_expected"] = opps.groupby(["team", "season"])["residual"].sum()
+    total_col = "runs_above_expected" if runs else "net_bases_above_expected"
+    out[total_col] = opps.groupby(["team", "season"])["residual"].sum()
+    out["per_chance"] = out[total_col] / out["n_opportunities"]
     out = out.reset_index()
     dropped = (out["n_opportunities"] < min_opportunities).sum()
     if dropped:
         print(f"Dropping {dropped} team-seasons with under {min_opportunities} opportunities")
     out = out[out["n_opportunities"] >= min_opportunities].reset_index(drop=True)
-    first = ["team", "season", "raw_score", "n_opportunities"] + ["runs_above_expected"] * runs
+    first = ["team", "season", "raw_score", "n_opportunities", total_col, "per_chance"]
     return out[first + [c for c in out.columns if c not in first]]
 
 
@@ -379,7 +384,7 @@ def aggregate_runners(opps, by_season=True, runs=False):
 
 def compute(n_bins=5, use_position=False, own_speed=False, reward_hustle=False, out_penalty=1.0,
             include_postseason=True, exclude_kinds=DEFAULT_EXCLUDED_KINDS, shrinkage_m=SHRINKAGE_M,
-            min_opportunities=MIN_OPPORTUNITIES, runs=False, odds="buckets",
+            min_opportunities=MIN_OPPORTUNITIES, runs=False, odds="smooth",
             values="re24", extra_base_value=FLAT_EXTRA_BASE, out_value=FLAT_OUT, show_evaluation=False, return_opportunities=False):
     if runs and (reward_hustle or out_penalty != 1.0):
         raise ValueError("runs can't be combined with reward_hustle or out_penalty (those score bases)")
@@ -396,10 +401,8 @@ def compute(n_bins=5, use_position=False, own_speed=False, reward_hustle=False, 
         print("\nRun values: does the built state match the real play?")
         print(check_construction(opps).to_string(), "\n")
         n_before = len(opps)
-        n_blocked = int((opps["rv_ok"] & opps["safe_blocked"]).sum())
-        opps = opps[opps["rv_ok"] & ~opps["safe_blocked"]].reset_index(drop=True)
-        print(f"{n_before - len(opps):,} of {n_before:,} chances left out: {n_before - len(opps) - n_blocked:,} with no "
-              f"run value, {n_blocked:,} where a runner ahead on the base he'd go to made going impossible")
+        opps = opps[opps["rv_ok"] & ~opps["safe_blocked"]].reset_index(drop=True)   # both should be empty now
+        print(f"{n_before - len(opps):,} of {n_before:,} chances left out for having no run value or a blocked runner")
         if values == "flat":
             print(f"Flat values: extra base +{extra_base_value:g}, thrown out -{out_value:g}, whatever the base-out state")
             opps = apply_flat_values(opps, extra_base_value, out_value)
@@ -457,7 +460,7 @@ def print_summary(scores, opps, out_dir, suffix, runs):
     runners = aggregate_runners(opps, by_season=False, runs=runs)
     value_col = "runs_above_expected" if runs else "net_bases_above_expected"
     qualified = runners[runners["n_opportunities"] >= 300]
-    team_col = "runs_above_expected" if runs else "raw_score"
+    team_col = "runs_above_expected" if runs else "net_bases_above_expected"
     print(f"\nDone. Files in {out_dir} (suffix '{suffix}'):")
     for name in ("extra_bases_statcast", "extra_bases_runners", "extra_bases_runners_career"):
         print(f"  {name}{suffix}.csv")
@@ -486,9 +489,10 @@ if __name__ == "__main__":
                     help="leave out the batter-going-for-3 chances (counted by default, see the README)")
     ap.add_argument("--runs", action="store_true",
                     help="score in runs (run expectancy) instead of bases; outputs get _runs in variants/")
-    ap.add_argument("--odds", choices=["buckets", "smooth"], default="buckets",
-                    help="where the expected odds come from: the situation buckets (default) or the smooth model "
-                         "(needs scikit-learn: run with .venv/bin/python); smooth outputs get _smooth in variants/")
+    ap.add_argument("--odds", choices=["buckets", "smooth"], default="smooth",
+                    help="where the expected odds come from: the smooth model (default; needs scikit-learn: "
+                         "run with .venv/bin/python) or the situation buckets (--odds buckets; outputs get "
+                         "_buckets in variants/)")
     ap.add_argument("--values", choices=["re24", "flat"], default="re24",
                     help="with --runs: what each result is worth. re24 (default) = run expectancy of the actual "
                          "base-out state; flat = the same value in every state (see --extra-base-value, --out-value); "
@@ -521,7 +525,7 @@ if __name__ == "__main__":
         suffix = "_experiment"  # non-default settings don't overwrite the real output
     else:
         suffix = ("_hustle" if args.hustle else "") + ("_runs" if args.runs else "") + ("_flat" if args.values == "flat" else "") \
-            + ("_smooth" if args.odds == "smooth" else "") + ("_ownspeed" if args.own_speed else "") \
+            + ("_buckets" if args.odds == "buckets" else "") + ("_ownspeed" if args.own_speed else "") \
             + ("_regularseason" if args.regular_season else "")
     root = OUT_DIR / "without_batter_for_3" if args.exclude_batter_for_3 else OUT_DIR
     out_dir = root / "variants" if suffix else root

@@ -39,10 +39,10 @@ STAT_DIR = ROOT / "data" / "processed" / "extra_bases_stat"
 OUT_DIR = STAT_DIR / "winning"
 REGULAR_SEASON = False   # set by --regular-season
 
-# label: (file, column holding the season total). The bases files hold a per-chance mean in raw_score only.
+# label: (file, column holding the team's season total: the sum of its residuals).
 VERSIONS = {
-    "bases (default)": ("extra_bases_statcast.csv", None),
-    "bases, smooth odds": ("variants/extra_bases_statcast_smooth.csv", None),
+    "bases (default)": ("extra_bases_statcast.csv", "net_bases_above_expected"),
+    "bases, smooth odds": ("variants/extra_bases_statcast_smooth.csv", "net_bases_above_expected"),
     "runs": ("variants/extra_bases_statcast_runs.csv", "runs_above_expected"),
     "runs, smooth odds": ("variants/extra_bases_statcast_runs_smooth.csv", "runs_above_expected"),
     "runs, flat values": ("variants/extra_bases_statcast_runs_flat.csv", "runs_above_expected"),
@@ -69,8 +69,10 @@ def load(label):
     path, total_col = VERSIONS[label]
     path = version_path(path)
     team = pd.read_csv(STAT_DIR / path)
-    team["per_chance"] = team["raw_score"]
-    team["total"] = team[total_col] if total_col else team["raw_score"] * team["n_opportunities"]
+    # the team files hold the true total (sum of residuals) and the true per-chance rate (total / chances).
+    # raw_score, the plain average of the six kinds, is neither: it gives a 45-chance kind the same weight
+    # as a 630-chance one.
+    team["total"] = team[total_col]
     standings = pd.read_csv(ROOT / "data" / "processed" / "standings.csv")
     df = team.merge(standings, on=["team", "season"])
     for col in ("total", "per_chance"):
